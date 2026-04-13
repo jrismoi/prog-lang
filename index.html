@@ -3,16 +3,25 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>MML — Music Markup Language</title>
+<title>Music but annoying</title>
 <link rel="preconnect" href="https://fonts.googleapis.com" />
-<link href="https://fonts.googleapis.com/css2?family=Space+Mono:ital,wght@0,400;0,700;1,400&family=Syne:wght@400;700;800&display=swap" rel="stylesheet" />
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:ital,wght@0,400;0,700;1,400&family=Outfit:wght@400;600;700;800&display=swap" rel="stylesheet" />
 <link rel="stylesheet" href="style.css" />
 </head>
 <body>
   <div class="scanlines"></div>
 
   <header>
-    <div class="logo">MML<span class="logo-sub">music markup language</span></div>
+    <div class="logo">
+      <span class="logo-mark" aria-hidden="true">
+        <span class="logo-orb orb-a"></span>
+        <span class="logo-orb orb-b"></span>
+        <span class="logo-orb orb-c"></span>
+      </span>
+      <span class="logo-text-wrap">
+        <span class="logo-text">Music but annoying</span>
+      </span>
+    </div>
     <nav class="nav-pills">
       <button class="pill active" data-tab="editor">editor</button>
       <button class="pill" data-tab="reference">reference</button>
@@ -134,7 +143,7 @@ key: A_minor</pre>
 1.3.4    → octave 1, 3rd degree, quarter
 0.5.8    → octave 0, 5th degree, eighth
 -1.1.1   → octave −1, root, whole</pre>
-          <p class="ref-desc">Octave 1 is middle. 0 is one below, −1 two below, 2 one above, etc.</p>
+          <p class="ref-desc">Octaves are keyed to the tonic. In D_minor, octave 1 spans D4 up through C5; octave 0 spans D3 through C4.</p>
         </div>
 
         <div class="ref-card">
@@ -187,7 +196,7 @@ Rep3 {
           <div class="ref-card-title">comments</div>
           <pre class="ref-code">// this is a comment
 1.1.4  // inline comment</pre>
-          <p class="ref-desc">Use // to annotate your score. Everything after // on a line is ignored.</p>
+          <p class="ref-desc">Use // to annotate your score. Everything after // on a line is ignored and rendered softly in the editor.</p>
         </div>
 
         <div class="ref-card">
@@ -216,6 +225,17 @@ time: 6-8    → 6/8  (6 eighth-note beats)</pre>
 1.7.4   // C5
 0.7.4   // C4</pre>
           <p class="ref-desc">Octave numbers always span from the key's tonic up to the note below the next tonic, rather than resetting at C.</p>
+        </div>
+
+        <div class="ref-card">
+          <div class="ref-card-title">hover details</div>
+          <pre class="ref-code">hover 1.1.1
+
+shows:
+note     D4
+octave   1
+beats    4</pre>
+          <p class="ref-desc">Hover any complete note token in the source pane to preview its explicit pitch, octave bucket, and beat value.</p>
         </div>
 
       </div>
