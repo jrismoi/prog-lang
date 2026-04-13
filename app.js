@@ -78,19 +78,21 @@ function beatsPerMeasure(timeSig) {
 const EXAMPLE = `key: D_minor
 time: 3-4
 
-// amazing grace
-1.1.4
-0.7.2
-1.3.4
-1.5.2
-1.3.8
-1.5.2
-1.4.4
+R.2
+0.7.4
+
 1.3.2
-1.1.4
-0.7.2
-1.3.4
-1.5.1
+1.5.8
+1.3.8 
+
+1.5.2 
+1.4.4 
+
+1.3.2 
+1.1.4 
+
+0.7.2 
+R.4
 `;
 
 // ── DOM REFS ─────────────────────────────────────────────────────────────────
@@ -467,73 +469,62 @@ function runCode() {
   outputRowEls = [];
   outputEmpty.style.display = 'none';
   btnRun.classList.add('running');
+  const events = parseCode(editorEl.value);
+  btnRun.classList.remove('running');
 
-  setTimeout(() => {
-    btnRun.classList.remove('running');
-    const events = parseCode(editorEl.value);
+  if (!events.length) {
+    outputEmpty.style.display = 'flex';
+    return;
+  }
 
-    if (!events.length) { outputEmpty.style.display = 'flex'; return; }
+  const lastTimeSig = extractTimeSig(editorEl.value);
+  const items = groupIntoMeasures(events, lastTimeSig);
+  const frag = document.createDocumentFragment();
 
-    // Find the last timeSig declared in header events
-    let lastTimeSig = null;
-    for (const ev of events) {
-      if (ev.type === 'info' && ev.text.startsWith('time set →')) {
-        // Re-parse from the event text isn't ideal; instead we re-parse from source
-      }
-    }
-    // Re-parse to extract timeSig (cleanest approach)
-    lastTimeSig = extractTimeSig(editorEl.value);
-
-    const items = groupIntoMeasures(events, lastTimeSig);
-
-    // Track event index for playback highlighting
-    let evIdx = 0;
-
-    items.forEach((item, idx) => {
-      if (item.kind === 'bar') {
-        const bar = document.createElement('div');
-        bar.className = 'out-barline' + (item.measureIndex > 0 ? ' out-barline-thick' : '');
-        if (item.measureIndex === 0) {
-          bar.setAttribute('data-measure', '1');
-        } else {
-          bar.setAttribute('data-measure', String(item.measureIndex + 1));
-        }
-        outputLines.appendChild(bar);
-        return;
-      }
-
-      // kind === 'event'
-      const ev = item.ev;
-      const row = document.createElement('div');
-      row.className = `out-line ${ev.type}`;
-      row.style.animationDelay = `${Math.min(evIdx * 20, 400)}ms`;
-
-      const lnum = document.createElement('span');
-      lnum.className = 'out-lnum';
-      lnum.textContent = ev.line;
-
-      const text = document.createElement('span');
-      text.className = 'out-text';
-
-      if (ev.type === 'note' && ev.noteName) {
-        const badge = document.createElement('span');
-        badge.className = 'out-note-name';
-        badge.textContent = ev.noteName;
-        text.appendChild(badge);
-        text.appendChild(document.createTextNode(ev.text));
+  let evIdx = 0;
+  items.forEach(item => {
+    if (item.kind === 'bar') {
+      const bar = document.createElement('div');
+      bar.className = 'out-barline' + (item.measureIndex > 0 ? ' out-barline-thick' : '');
+      if (item.measureIndex === 0) {
+        bar.setAttribute('data-measure', '1');
       } else {
-        text.textContent = ev.text;
+        bar.setAttribute('data-measure', String(item.measureIndex + 1));
       }
+      frag.appendChild(bar);
+      return;
+    }
 
-      row.appendChild(lnum);
-      row.appendChild(text);
-      outputLines.appendChild(row);
+    const ev = item.ev;
+    const row = document.createElement('div');
+    row.className = `out-line ${ev.type}`;
 
-      outputRowEls.push({ el: row, ev, evIdx });
-      evIdx++;
-    });
+    const lnum = document.createElement('span');
+    lnum.className = 'out-lnum';
+    lnum.textContent = ev.line;
 
-  }, 80);
+    const text = document.createElement('span');
+    text.className = 'out-text';
+
+    if (ev.type === 'note' && ev.noteName) {
+      const badge = document.createElement('span');
+      badge.className = 'out-note-name';
+      badge.textContent = ev.noteName;
+      text.appendChild(badge);
+      text.appendChild(document.createTextNode(ev.text));
+    } else {
+      text.textContent = ev.text;
+    }
+
+    row.appendChild(lnum);
+    row.appendChild(text);
+    frag.appendChild(row);
+
+    outputRowEls.push({ el: row, ev, evIdx });
+    evIdx++;
+  });
+
+  outputLines.appendChild(frag);
 }
 
 // Extract the first time signature from source code
@@ -759,9 +750,11 @@ let isPlaying      = false;
 let isPaused       = false;
 let scheduledNodes = [];
 let rafId          = null;
+let playbackTimer  = null;
 let playStartTime  = 0;
 let totalDuration  = 0;
 let noteTimings    = [];
+let activeTimingIdx = -1;
 
 function buildTimings(events, bpm) {
   const beatSec = 60 / bpm;
@@ -811,6 +804,7 @@ function startPlayback() {
   const { timings, total } = buildTimings(events, bpm);
   noteTimings   = timings;
   totalDuration = total;
+  activeTimingIdx = -1;
 
   const offset = 0.05;
   playStartTime = ctx.currentTime + offset;
@@ -827,7 +821,7 @@ function startPlayback() {
   btnPlay.classList.add('playing');
   progressCursor.classList.add('visible');
   setStatus('playing', true);
-  animateProgress();
+  startPlaybackUI();
 }
 
 function pausePlayback() {
@@ -838,6 +832,8 @@ function pausePlayback() {
   btnPlay.classList.remove('playing');
   setStatus('paused', false);
   cancelAnimationFrame(rafId);
+  clearInterval(playbackTimer);
+  playbackTimer = null;
   clearPlayingNow();
 }
 
@@ -848,7 +844,7 @@ function resumePlayback() {
   btnPlay.textContent = '⏸';
   btnPlay.classList.add('playing');
   setStatus('playing', true);
-  animateProgress();
+  startPlaybackUI();
 }
 
 function stopPlayback(ended = false) {
@@ -865,6 +861,9 @@ function stopPlayback(ended = false) {
   pbNoteLabel.textContent = '—';
   setStatus('ready', false);
   cancelAnimationFrame(rafId);
+  clearInterval(playbackTimer);
+  playbackTimer = null;
+  activeTimingIdx = -1;
   clearPlayingNow();
 }
 
@@ -891,25 +890,37 @@ function highlightRowByEvIdx(evIdx) {
   const wrapTop    = wrap.scrollTop;
   const wrapBottom = wrapTop + wrap.clientHeight;
   if (elTop < wrapTop + 40 || elBottom > wrapBottom - 40) {
-    entry.el.scrollIntoView({ block: 'center', behavior: 'smooth' });
+    wrap.scrollTop = Math.max(0, elTop - (wrap.clientHeight / 2) + (entry.el.offsetHeight / 2));
   }
 }
 
 function animateProgress() {
-  rafId = requestAnimationFrame(() => {
-    if (!isPlaying || !audioCtx) return;
-    const elapsed = audioCtx.currentTime - playStartTime;
-    const pct = Math.min(100, (elapsed / totalDuration) * 100).toFixed(2);
-    progressFill.style.width = pct + '%';
-    progressCursor.style.left = pct + '%';
+  if (!isPlaying || !audioCtx) return;
+  const elapsed = audioCtx.currentTime - playStartTime;
+  const pct = Math.min(100, Math.max(0, (elapsed / totalDuration) * 100)).toFixed(2);
+  progressFill.style.width = pct + '%';
+  progressCursor.style.left = pct + '%';
 
-    const cur = noteTimings.find(n => elapsed >= n.start && elapsed < n.end);
-    pbNoteLabel.textContent = cur ? cur.noteName : '—';
-    if (cur) highlightRowByEvIdx(cur.evIdx);
-    else clearPlayingNow();
+  while (activeTimingIdx + 1 < noteTimings.length && elapsed >= noteTimings[activeTimingIdx + 1].start) {
+    activeTimingIdx++;
+  }
 
+  let cur = null;
+  if (activeTimingIdx >= 0) {
+    const candidate = noteTimings[activeTimingIdx];
+    if (elapsed < candidate.end) cur = candidate;
+  }
+
+  pbNoteLabel.textContent = cur ? cur.noteName : '—';
+}
+
+function startPlaybackUI() {
+  clearInterval(playbackTimer);
+  animateProgress();
+  playbackTimer = setInterval(() => {
+    if (!isPlaying) return;
     animateProgress();
-  });
+  }, 50);
 }
 
 function setStatus(msg, active) {
