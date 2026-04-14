@@ -95,10 +95,19 @@ R.2
 R.4
 `;
 
+let sourceParts = [
+  { id: 1, name: 'part 1', src: EXAMPLE }
+];
+let activePartId = 1;
+let nextPartId = 2;
+let currentPlaybackPartCount = 1;
+
 // ── DOM REFS ─────────────────────────────────────────────────────────────────
 const editorEl       = document.getElementById('code-editor');
 const syntaxLayer    = document.getElementById('syntax-layer');
 const lineNumbers    = document.getElementById('line-numbers');
+const sourceTabsEl   = document.getElementById('source-tabs');
+const outputTabsEl   = document.getElementById('output-tabs');
 const editorHud      = document.getElementById('editor-hud');
 const noteTooltip    = document.getElementById('note-tooltip');
 const outputLines    = document.getElementById('output-lines');
@@ -107,6 +116,8 @@ const btnRun         = document.getElementById('btn-run');
 const btnClearEd     = document.getElementById('btn-clear-editor');
 const btnClearOut    = document.getElementById('btn-clear-output');
 const btnExample     = document.getElementById('btn-example');
+const btnAddPart     = document.getElementById('btn-add-part');
+const btnRemovePart  = document.getElementById('btn-remove-part');
 const pills          = document.querySelectorAll('.pill');
 const btnPlay        = document.getElementById('btn-play');
 const btnStop        = document.getElementById('btn-stop');
@@ -121,6 +132,8 @@ const statusText     = document.getElementById('status-text');
 const themeToggle    = document.getElementById('theme-toggle');
 const toggleIcon     = document.getElementById('toggle-icon');
 const toggleLabel    = document.getElementById('toggle-label');
+let lastCompiledParts = [];
+let activeOutputPartId = 1;
 
 // ── THEME TOGGLE ─────────────────────────────────────────────────────────────
 let isDayTheme = false;
@@ -145,6 +158,80 @@ pills.forEach(pill => {
     document.getElementById('tab-' + pill.dataset.tab).classList.add('active');
   });
 });
+
+function getActivePart() {
+  return sourceParts.find(part => part.id === activePartId) || sourceParts[0];
+}
+
+function saveActivePartSource() {
+  const part = getActivePart();
+  if (part) part.src = editorEl.value;
+}
+
+function makePartTemplate() {
+  const base = sourceParts[0]?.src || EXAMPLE;
+  const lines = base.split('\n');
+  const headers = lines.filter(line => /^\s*(key|time)\s*:/.test(line));
+  return headers.join('\n') + '\n\n';
+}
+
+function renderSourceTabs() {
+  sourceTabsEl.innerHTML = sourceParts.map(part =>
+    `<button class="source-tab${part.id === activePartId ? ' active' : ''}" data-part-id="${part.id}">${esc(part.name)}</button>`
+  ).join('');
+
+  sourceTabsEl.querySelectorAll('.source-tab').forEach(btn => {
+    btn.addEventListener('click', () => switchSourcePart(parseInt(btn.dataset.partId)));
+  });
+
+  btnRemovePart.disabled = sourceParts.length === 1;
+  renderOutputTabs();
+}
+
+function renderOutputTabs() {
+  outputTabsEl.innerHTML = sourceParts.map(part =>
+    `<button class="source-tab${part.id === activeOutputPartId ? ' active' : ''}" data-output-part-id="${part.id}">${esc(part.name)}</button>`
+  ).join('');
+
+  outputTabsEl.querySelectorAll('.source-tab').forEach(btn => {
+    btn.addEventListener('click', () => {
+      activeOutputPartId = parseInt(btn.dataset.outputPartId);
+      renderOutputTabs();
+      if (lastCompiledParts.length) runCode();
+    });
+  });
+}
+
+function switchSourcePart(partId) {
+  saveActivePartSource();
+  activePartId = partId;
+  activeOutputPartId = partId;
+  const part = getActivePart();
+  editorEl.value = part ? part.src : '';
+  renderSourceTabs();
+  updateHighlight();
+}
+
+function addSourcePart() {
+  saveActivePartSource();
+  const id = nextPartId++;
+  sourceParts.push({ id, name: `part ${sourceParts.length + 1}`, src: makePartTemplate() });
+  switchSourcePart(id);
+}
+
+function removeSourcePart() {
+  if (sourceParts.length === 1) return;
+  saveActivePartSource();
+  const removeIdx = sourceParts.findIndex(part => part.id === activePartId);
+  sourceParts.splice(removeIdx, 1);
+  sourceParts = sourceParts.map((part, idx) => ({ ...part, name: `part ${idx + 1}` }));
+  activePartId = sourceParts[Math.max(0, removeIdx - 1)]?.id || sourceParts[0].id;
+  activeOutputPartId = activePartId;
+  const part = getActivePart();
+  editorEl.value = part ? part.src : '';
+  renderSourceTabs();
+  updateHighlight();
+}
 
 // ── SYNTAX HIGHLIGHTING ───────────────────────────────────────────────────────
 function esc(s) {
@@ -234,6 +321,7 @@ function tokenizeLine(line) {
 }
 
 function updateHighlight() {
+  saveActivePartSource();
   const lines = editorEl.value.split('\n');
   syntaxLayer.innerHTML = lines.map(tokenizeLine).join('\n');
   updateLineNumbers(lines.length);
@@ -407,6 +495,68 @@ function parseCode(src) {
   return parseLines(src.split('\n'), null, null, null, 0);
 }
 
+function getScoreHeaders(src) {
+  let key = null;
+  let timeSig = null;
+
+  for (const line of src.split('\n')) {
+    const raw = line.replace(/\/\/.*$/, '').trim();
+    if (!raw) continue;
+    const km = raw.match(/^key\s*:\s*(\S+)$/);
+    if (km) {
+      key = km[1];
+      continue;
+    }
+    const tm = raw.match(/^time\s*:\s*(\S+)$/);
+    if (tm) {
+      timeSig = parseTimeSig(tm[1]);
+    }
+  }
+
+  return { key, timeSig };
+}
+
+function compileSourceParts() {
+  saveActivePartSource();
+  const activeParts = sourceParts.filter(part => part.src.trim());
+  if (!activeParts.length) return { valid: true, parts: [], errors: [], key: null, timeSig: null };
+
+  const compiledParts = activeParts.map(part => ({
+    ...part,
+    headers: getScoreHeaders(part.src),
+    events: parseCode(part.src).map((ev, idx) => ({ ...ev, _eventIndex: idx }))
+  }));
+
+  const errors = [];
+  const baseline = compiledParts[0].headers;
+  const baselineTime = baseline.timeSig ? `${baseline.timeSig.beats}-${baseline.timeSig.denom}` : null;
+
+  compiledParts.forEach(part => {
+    if (!part.headers.key) {
+      errors.push({ type: 'err', line: 1, text: `${part.name} is missing a key signature.` });
+    }
+    if (activeParts.length > 1 && !part.headers.timeSig) {
+      errors.push({ type: 'err', line: 1, text: `${part.name} is missing a time signature.` });
+    }
+  });
+
+  if (!errors.length && activeParts.length > 1) {
+    compiledParts.slice(1).forEach(part => {
+      const partTime = `${part.headers.timeSig.beats}-${part.headers.timeSig.denom}`;
+      if (part.headers.key !== baseline.key) {
+        errors.push({ type: 'err', line: 1, text: `${part.name} key must match ${compiledParts[0].name} (${baseline.key}).` });
+      }
+      if (partTime !== baselineTime) {
+        errors.push({ type: 'err', line: 1, text: `${part.name} time must match ${compiledParts[0].name} (${baselineTime}).` });
+      }
+    });
+  }
+
+  const valid = errors.length === 0 && !compiledParts.some(part => part.events.some(ev => ev.type === 'err'));
+  lastCompiledParts = compiledParts;
+  return { valid, parts: compiledParts, errors, key: baseline.key, timeSig: baseline.timeSig };
+}
+
 // ── MEASURE GROUPING ──────────────────────────────────────────────────────────
 // Given a flat event list and a timeSig, returns a structured list of
 // "output items" which are either events or measure-boundary markers.
@@ -469,59 +619,82 @@ function runCode() {
   outputRowEls = [];
   outputEmpty.style.display = 'none';
   btnRun.classList.add('running');
-  const events = parseCode(editorEl.value);
+  const compiled = compileSourceParts();
   btnRun.classList.remove('running');
 
-  if (!events.length) {
+  if (!compiled.parts.length && !compiled.errors.length) {
     outputEmpty.style.display = 'flex';
     return;
   }
 
-  const lastTimeSig = extractTimeSig(editorEl.value);
-  const items = groupIntoMeasures(events, lastTimeSig);
   const frag = document.createDocumentFragment();
-
   let evIdx = 0;
-  items.forEach(item => {
-    if (item.kind === 'bar') {
-      const bar = document.createElement('div');
-      bar.className = 'out-barline' + (item.measureIndex > 0 ? ' out-barline-thick' : '');
-      if (item.measureIndex === 0) {
-        bar.setAttribute('data-measure', '1');
-      } else {
-        bar.setAttribute('data-measure', String(item.measureIndex + 1));
-      }
-      frag.appendChild(bar);
-      return;
-    }
 
-    const ev = item.ev;
+  compiled.errors.forEach(ev => {
     const row = document.createElement('div');
-    row.className = `out-line ${ev.type}`;
-
+    row.className = 'out-line err';
     const lnum = document.createElement('span');
     lnum.className = 'out-lnum';
-    lnum.textContent = ev.line;
-
+    lnum.textContent = '!';
     const text = document.createElement('span');
     text.className = 'out-text';
-
-    if (ev.type === 'note' && ev.noteName) {
-      const badge = document.createElement('span');
-      badge.className = 'out-note-name';
-      badge.textContent = ev.noteName;
-      text.appendChild(badge);
-      text.appendChild(document.createTextNode(ev.text));
-    } else {
-      text.textContent = ev.text;
-    }
-
+    text.textContent = ev.text;
     row.appendChild(lnum);
     row.appendChild(text);
     frag.appendChild(row);
+  });
 
-    outputRowEls.push({ el: row, ev, evIdx });
-    evIdx++;
+  const visibleParts = compiled.parts.filter(part => part.id === activeOutputPartId);
+  const partsToRender = visibleParts.length ? visibleParts : compiled.parts.slice(0, 1);
+
+  partsToRender.forEach(part => {
+    const header = document.createElement('div');
+    header.className = 'out-section';
+    header.textContent = part.name;
+    frag.appendChild(header);
+
+    const items = groupIntoMeasures(part.events, compiled.timeSig);
+    items.forEach(item => {
+      if (item.kind === 'bar') {
+        const bar = document.createElement('div');
+        bar.className = 'out-barline' + (item.measureIndex > 0 ? ' out-barline-thick' : '');
+        if (item.measureIndex === 0) {
+          bar.setAttribute('data-measure', '1');
+        } else {
+          bar.setAttribute('data-measure', String(item.measureIndex + 1));
+        }
+        frag.appendChild(bar);
+        return;
+      }
+
+      const ev = item.ev;
+      const row = document.createElement('div');
+      row.className = `out-line ${ev.type}`;
+
+      const lnum = document.createElement('span');
+      lnum.className = 'out-lnum';
+      lnum.textContent = ev.line;
+
+      const text = document.createElement('span');
+      text.className = 'out-text';
+
+      if (ev.type === 'note' && ev.noteName) {
+        const badge = document.createElement('span');
+        badge.className = 'out-note-name';
+        badge.textContent = ev.noteName;
+        text.appendChild(badge);
+        text.appendChild(document.createTextNode(ev.text));
+      } else {
+        text.textContent = ev.text;
+      }
+
+      row.appendChild(lnum);
+      row.appendChild(text);
+      frag.appendChild(row);
+
+      outputRowEls.push({ el: row, ev, evIdx, partId: part.id, eventIndex: ev._eventIndex });
+      evIdx++;
+    });
   });
 
   outputLines.appendChild(frag);
@@ -734,12 +907,20 @@ function hideNoteTooltip() {
 // ── WEB AUDIO ENGINE ─────────────────────────────────────────────────────────
 let audioCtx   = null;
 let masterGain = null;
+let masterComp = null;
 
 function getAudioCtx() {
   if (!audioCtx) {
     audioCtx = new (window.AudioContext || window.webkitAudioContext)();
     masterGain = audioCtx.createGain();
-    masterGain.connect(audioCtx.destination);
+    masterComp = audioCtx.createDynamicsCompressor();
+    masterComp.threshold.value = -18;
+    masterComp.knee.value = 18;
+    masterComp.ratio.value = 10;
+    masterComp.attack.value = 0.003;
+    masterComp.release.value = 0.2;
+    masterGain.connect(masterComp);
+    masterComp.connect(audioCtx.destination);
   }
   if (audioCtx.state === 'suspended') audioCtx.resume();
   masterGain.gain.value = parseFloat(volSlider.value);
@@ -756,15 +937,16 @@ let totalDuration  = 0;
 let noteTimings    = [];
 let activeTimingIdx = -1;
 
-function buildTimings(events, bpm) {
+function buildTimings(events, bpm, partName = '') {
   const beatSec = 60 / bpm;
   const timings = [];
   let t = 0;
   events.forEach((ev, evIdx) => {
+    ev._eventIndex = evIdx;
     if (ev.type === 'note' || ev.type === 'rest') {
       const sec = ev.beats * beatSec;
       if (ev.type === 'note') {
-        timings.push({ start: t, end: t + sec, noteName: ev.noteName, freq: ev.freq, evIdx });
+        timings.push({ start: t, end: t + sec, noteName: ev.noteName, freq: ev.freq, evIdx, partName, eventIndex: evIdx });
       }
       t += sec;
     }
@@ -780,11 +962,14 @@ function scheduleNote(ctx, freq, startTime, durSec, waveType) {
   osc.frequency.value = freq;
   osc.connect(gain);
 
-  const atk = 0.008;
-  const rel = Math.min(0.07, durSec * 0.18);
+  const atk = 0.012;
+  const rel = Math.min(0.1, durSec * 0.24);
+  const partScale = 0.32 / Math.sqrt(Math.max(1, currentPlaybackPartCount));
+  const waveScale = waveType === 'square' || waveType === 'sawtooth' ? 0.75 : 1;
+  const peak = partScale * waveScale;
   gain.gain.setValueAtTime(0, startTime);
-  gain.gain.linearRampToValueAtTime(1, startTime + atk);
-  gain.gain.setValueAtTime(1, startTime + durSec - rel);
+  gain.gain.linearRampToValueAtTime(peak, startTime + atk);
+  gain.gain.setValueAtTime(peak, startTime + durSec - rel);
   gain.gain.linearRampToValueAtTime(0, startTime + durSec);
 
   osc.start(startTime);
@@ -793,27 +978,43 @@ function scheduleNote(ctx, freq, startTime, durSec, waveType) {
 }
 
 function startPlayback() {
-  const events = parseCode(editorEl.value);
-  const playable = events.filter(ev => ev.type === 'note' && ev.freq);
-  if (!playable.length) { setStatus('no notes', false); return; }
+  const compiled = compileSourceParts();
+  if (!compiled.valid) {
+    setStatus('fix parts', false);
+    runCode();
+    return;
+  }
 
   const ctx  = getAudioCtx();
   const bpm  = Math.max(20, Math.min(400, parseInt(bpmInput.value) || 120));
   const wave = waveSelect.value;
+  const noteGroups = [];
+  let longest = 0;
 
-  const { timings, total } = buildTimings(events, bpm);
-  noteTimings   = timings;
-  totalDuration = total;
+  compiled.parts.forEach(part => {
+    const playable = part.events.filter(ev => ev.type === 'note' && ev.freq);
+    if (!playable.length) return;
+    const { timings, total } = buildTimings(part.events, bpm, part.name);
+    timings.forEach(timing => timing.partId = part.id);
+    noteGroups.push(...timings);
+    longest = Math.max(longest, total);
+  });
+
+  if (!noteGroups.length) { setStatus('no notes', false); return; }
+
+  currentPlaybackPartCount = compiled.parts.filter(part => part.events.some(ev => ev.type === 'note' && ev.freq)).length || 1;
+  noteTimings = noteGroups.sort((a, b) => a.start - b.start);
+  totalDuration = longest;
   activeTimingIdx = -1;
 
   const offset = 0.05;
   playStartTime = ctx.currentTime + offset;
 
-  timings.forEach(n => {
+  noteTimings.forEach(n => {
     scheduleNote(ctx, n.freq, playStartTime + n.start, n.end - n.start, wave);
   });
 
-  setTimeout(() => { if (isPlaying) stopPlayback(true); }, (total + offset + 0.2) * 1000);
+  setTimeout(() => { if (isPlaying) stopPlayback(true); }, (longest + offset + 0.2) * 1000);
 
   isPlaying = true;
   isPaused  = false;
@@ -864,33 +1065,43 @@ function stopPlayback(ended = false) {
   clearInterval(playbackTimer);
   playbackTimer = null;
   activeTimingIdx = -1;
+  currentPlaybackPartCount = 1;
   clearPlayingNow();
 }
 
 // ── OUTPUT HIGHLIGHT ─────────────────────────────────────────────────────────
-let currentHighlightedRow = null;
+let currentHighlightedRows = new Set();
 
 function clearPlayingNow() {
-  if (currentHighlightedRow) {
-    currentHighlightedRow.classList.remove('playing-now');
-    currentHighlightedRow = null;
-  }
+  currentHighlightedRows.forEach(row => row.classList.remove('playing-now'));
+  currentHighlightedRows.clear();
 }
 
-function highlightRowByEvIdx(evIdx) {
-  const entry = outputRowEls.find(r => r.evIdx === evIdx);
-  if (!entry || entry.el === currentHighlightedRow) return;
-  clearPlayingNow();
-  currentHighlightedRow = entry.el;
-  entry.el.classList.add('playing-now');
+function syncPlayingHighlights(sounding) {
+  const keys = new Set(sounding.map(note => `${note.partId}:${note.eventIndex}`));
+  const nextRows = new Set();
 
-  const wrap = document.getElementById('output-wrap');
-  const elTop    = entry.el.offsetTop;
-  const elBottom = elTop + entry.el.offsetHeight;
-  const wrapTop    = wrap.scrollTop;
-  const wrapBottom = wrapTop + wrap.clientHeight;
-  if (elTop < wrapTop + 40 || elBottom > wrapBottom - 40) {
-    wrap.scrollTop = Math.max(0, elTop - (wrap.clientHeight / 2) + (entry.el.offsetHeight / 2));
+  outputRowEls.forEach(entry => {
+    if (keys.has(`${entry.partId}:${entry.eventIndex}`)) {
+      entry.el.classList.add('playing-now');
+      nextRows.add(entry.el);
+    } else {
+      entry.el.classList.remove('playing-now');
+    }
+  });
+
+  currentHighlightedRows = nextRows;
+
+  const first = outputRowEls.find(entry => keys.has(`${entry.partId}:${entry.eventIndex}`));
+  if (first) {
+    const wrap = document.getElementById('output-wrap');
+    const elTop = first.el.offsetTop;
+    const elBottom = elTop + first.el.offsetHeight;
+    const wrapTop = wrap.scrollTop;
+    const wrapBottom = wrapTop + wrap.clientHeight;
+    if (elTop < wrapTop + 40 || elBottom > wrapBottom - 40) {
+      wrap.scrollTop = Math.max(0, elTop - (wrap.clientHeight / 2) + (first.el.offsetHeight / 2));
+    }
   }
 }
 
@@ -905,13 +1116,12 @@ function animateProgress() {
     activeTimingIdx++;
   }
 
-  let cur = null;
-  if (activeTimingIdx >= 0) {
-    const candidate = noteTimings[activeTimingIdx];
-    if (elapsed < candidate.end) cur = candidate;
-  }
-
-  pbNoteLabel.textContent = cur ? cur.noteName : '—';
+  const sounding = noteTimings.filter(note => elapsed >= note.start && elapsed < note.end);
+  pbNoteLabel.textContent = sounding.length
+    ? sounding.map(note => `${note.partName}:${note.noteName}`).join(' · ')
+    : '—';
+  if (sounding.length) syncPlayingHighlights(sounding);
+  else clearPlayingNow();
 }
 
 function startPlaybackUI() {
@@ -949,6 +1159,8 @@ document.addEventListener('keydown', e => {
 btnRun.addEventListener('click', runCode);
 btnClearEd.addEventListener('click', () => {
   stopPlayback();
+  const part = getActivePart();
+  if (part) part.src = '';
   editorEl.value = '';
   updateHighlight();
 });
@@ -959,10 +1171,18 @@ btnClearOut.addEventListener('click', () => {
 });
 btnExample.addEventListener('click', () => {
   stopPlayback();
+  sourceParts = [{ id: 1, name: 'part 1', src: EXAMPLE }];
+  activePartId = 1;
+  activeOutputPartId = 1;
+  nextPartId = 2;
   editorEl.value = EXAMPLE;
+  renderSourceTabs();
   updateHighlight();
 });
+btnAddPart.addEventListener('click', addSourcePart);
+btnRemovePart.addEventListener('click', removeSourcePart);
 
 // ── INIT ──────────────────────────────────────────────────────────────────────
-editorEl.value = EXAMPLE;
+editorEl.value = getActivePart().src;
+renderSourceTabs();
 updateHighlight();

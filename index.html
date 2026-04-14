@@ -6,7 +6,7 @@
 <title>Music but annoying</title>
 <link rel="preconnect" href="https://fonts.googleapis.com" />
 <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:ital,wght@0,400;0,700;1,400&family=Outfit:wght@400;600;700;800&display=swap" rel="stylesheet" />
-<link rel="stylesheet" href="style.css?v=20260413b" />
+<link rel="stylesheet" href="style.css?v=20260413f" />
 </head>
 <body>
   <div class="scanlines"></div>
@@ -50,6 +50,13 @@
               <button class="action-btn" id="btn-example">example</button>
             </div>
           </div>
+          <div class="source-tabs-wrap">
+            <div class="source-tabs" id="source-tabs"></div>
+            <div class="source-tab-actions">
+              <button class="action-btn" id="btn-add-part">+ part</button>
+              <button class="action-btn" id="btn-remove-part">remove</button>
+            </div>
+          </div>
           <div class="editor-wrap">
             <div class="line-numbers" id="line-numbers"></div>
             <div class="editor-inner">
@@ -74,6 +81,9 @@
             <div class="pane-actions">
               <button class="action-btn" id="btn-clear-output">clear</button>
             </div>
+          </div>
+          <div class="source-tabs-wrap output-tabs-wrap">
+            <div class="source-tabs" id="output-tabs"></div>
           </div>
           <div class="output-wrap" id="output-wrap">
             <div class="output-empty" id="output-empty">
@@ -193,6 +203,16 @@ Rep3 {
         </div>
 
         <div class="ref-card">
+          <div class="ref-card-title">parts / tabs</div>
+          <pre class="ref-code">part 1  → melody
+part 2  → harmony
+
+run     → compiles together
+play    → plays together</pre>
+          <p class="ref-desc">Use source tabs to write simultaneous parts. All active parts must share the same key and time signature so they stay synchronized.</p>
+        </div>
+
+        <div class="ref-card">
           <div class="ref-card-title">comments</div>
           <pre class="ref-code">// this is a comment
 1.1.4  // inline comment</pre>
@@ -242,6 +262,6 @@ beats    4</pre>
     </div>
   </main>
 
-  <script src="app.js?v=20260413b"></script>
+  <script src="app.js?v=20260413f"></script>
 </body>
 </html>
